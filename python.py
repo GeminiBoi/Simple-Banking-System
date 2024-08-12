@@ -1,12 +1,39 @@
-from abc import ABC
-import random
+import hashlib
 import sqlite3
 from datetime import datetime
+from abc import ABC
+import re
+import random
+
+# Hashing utility function
+def hash_value(value):
+    return hashlib.sha256(value.encode()).hexdigest()
+
+# Validate PIN
+def validate_pin(pin):
+    return pin.isdigit() and len(pin) == 4
+
+# Validate Password
+def validate_password(password):
+    return len(password) >= 8
+
+# Validate Email
+def is_valid_email(email):
+    return re.match(r"[^@]+@[^@]+\.[^@]+", email) is not None
+
+# Validate Date
+def is_valid_date(date_str):
+    try:
+        day, month, year = map(int, date_str.split('/'))
+        return 1 <= day <= 31 and 1 <= month <= 12 and year > 1850
+    except ValueError:
+        return False
 
 class AccountState:
     def __init__(self):
         self.amount = 0.0
-        self.pin = 0
+        self.pin = ""
+        self.account_number = ""
 
     def set_amount(self, amount):
         self.amount = amount
@@ -20,21 +47,32 @@ class AccountState:
     def get_pin(self):
         return self.pin
 
+    def set_account_number(self, account_number):
+        self.account_number = account_number
+
+    def get_account_number(self):
+        return self.account_number
+
 account_state = AccountState()
 
 class Bank(ABC):
     def __init__(self):
         self.state = account_state
+        self.create_table()
+        self.conn = sqlite3.connect('bank.db')
+        self.c = self.conn.cursor()
 
+    def __del__(self):
+        self.conn.close()
     def create_table(self):
         with sqlite3.connect('bank.db') as conn:
             c = conn.cursor()
+            c.execute('DROP TABLE IF EXISTS accounts')  # Drop the table if it exists
             c.execute('''
                 CREATE TABLE IF NOT EXISTS accounts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     firstname TEXT,
                     second_name TEXT,
-                    other_name TEXT,
                     dob TEXT,
                     age INTEGER,
                     email TEXT UNIQUE,
@@ -68,42 +106,33 @@ class Account(Bank):
     def create_account(self):
         firstname = input("Firstname: ")
         second_name = input("Secondname: ")
-        other_name = input("Othername: ")
-        date = input("Date of birth (DD/MM/YYYY): ")
+        dob = input("Date of birth (DD/MM/YYYY): ")
         age = input("Age: ")
         email = input("Email: ")
         password = input("Password: ")
-        pin = input("Pin: ")
+        pin = input("PIN (4 digits): ")
         security_question = input("Security Question: ")
         security_answer = input("Security Answer: ")
 
-        def is_only_alphabets(s):
-            return s.isalpha()
-
-        def contains_at_symbol(m):
-            return '@' in m and '.com' in m
-
-        def is_valid_date(n):
-            try:
-                month, day, year = map(int, n.split('/'))
-                return 1 <= month <= 12 and 1 <= day <= 31 and year > 1850
-            except ValueError:
-                return False
-
-        if all(is_only_alphabets(name) for name in [firstname, second_name, other_name]):
-            if contains_at_symbol(email):
-                if is_valid_date(date):
+        # Validation checks
+        if all(s.isalpha() for s in [firstname, second_name]):
+            if is_valid_email(email):
+                if is_valid_date(dob):
                     if int(age) > 0:
-                        if len(password) >= 8:
-                            self.state.set_amount(float(input("Enter your first deposit: ")))
-                            if self.state.get_amount() >= 50:
-                                self.state.set_pin(pin)
-                                account_number = self.create_accountnum()
-                                print("Account created successfully")
-                                print("Your Account number is", account_number, "and your balance is", self.state.get_amount())
-                                self.save_account(firstname, second_name, other_name, date, age, email, password, pin, self.state.get_amount(), account_number, security_question, security_answer)
+                        if validate_password(password):
+                            if validate_pin(pin):
+                                deposit_amount = float(input("Enter your first deposit: "))
+                                if deposit_amount >= 50:
+                                    hashed_password = hash_value(password)
+                                    hashed_pin = hash_value(pin)
+                                    account_number = self.create_accountnum()
+                                    print("Account created successfully")
+                                    print(f"Your Account number is {account_number} and your balance is {deposit_amount:.2f}")
+                                    self.save_account(firstname, second_name, dob, age, email, hashed_password, hashed_pin, deposit_amount, account_number, security_question, security_answer)
+                                else:
+                                    print("Account couldn't be created due to insufficient deposit.")
                             else:
-                                print("Account couldn't be created due to insufficient deposit.")
+                                print("Invalid PIN. It must be 4 digits.")
                         else:
                             print("Password must be at least 8 characters long.")
                     else:
@@ -120,7 +149,7 @@ class Account(Bank):
             c = conn.cursor()
             try:
                 c.execute('''
-                    INSERT INTO accounts (firstname, second_name, other_name, dob, age, email, password, pin, balance, account_number, security_question, security_answer)
+                    INSERT INTO accounts (firstname, second_name, dob, age, email, password, pin, balance, account_number, security_question, security_answer)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (firstname, second_name, other_name, dob, int(age), email, password, pin, balance, account_number, security_question, security_answer))
                 conn.commit()
@@ -130,19 +159,26 @@ class Account(Bank):
                 print("Error: Email or Account number already exists.")
                 return False
 
-    def login_account(self):
+    def login_account(self,email,password):
+        self.email=email
+        self.password=password
+
         email = input("Email: ")
         password = input("Password: ")
+        hashed_password = hash_value(password)
+
         with sqlite3.connect('bank.db') as conn:
             c = conn.cursor()
             c.execute('''
                 SELECT * FROM accounts WHERE email = ? AND password = ?
-            ''', (email, password))
+            ''', (email, hashed_password))
             account = c.fetchone()
+
             if account:
                 print("Login successful!")
-                self.state.set_amount(account[8])
-                self.state.set_pin(account[7])
+                self.state.set_amount(account[9])  # Assuming column index 9 is the balance
+                self.state.set_pin(account[8])  # Assuming column index 8 is the PIN
+                self.state.set_account_number(account[10])  # Assuming column index 10 is the account number
                 return True
             else:
                 print("Invalid email or password")
@@ -158,7 +194,20 @@ class Account(Bank):
             ''', (email, security_answer))
             pin = c.fetchone()
             if pin:
-                print(f"Your PIN is {pin[0]}")
+                new_pin = input("Enter a new PIN (4 digits): ")
+                confirm_pin = input("Confirm your new PIN: ")
+                if new_pin == confirm_pin:
+                    if validate_pin(new_pin):
+                        hashed_pin = hash_value(new_pin)
+                        c.execute('''
+                            UPDATE accounts SET pin = ? WHERE email = ?
+                        ''', (hashed_pin, email))
+                        conn.commit()
+                        print("PIN updated successfully.")
+                    else:
+                        print("Invalid PIN. It must be 4 digits.")
+                else:
+                    print("PINs do not match. Please try again.")
             else:
                 print("Invalid email or security answer.")
 
@@ -172,7 +221,20 @@ class Account(Bank):
             ''', (email, security_answer))
             password = c.fetchone()
             if password:
-                print(f"Your password is {password[0]}")
+                new_password = input("Enter a new password: ")
+                confirm_password = input("Confirm your new password: ")
+                if new_password == confirm_password:
+                    if validate_password(new_password):
+                        hashed_password = hash_value(new_password)
+                        c.execute('''
+                            UPDATE accounts SET password = ? WHERE email = ?
+                        ''', (hashed_password, email))
+                        conn.commit()
+                        print("Password updated successfully.")
+                    else:
+                        print("Password must be at least 8 characters long.")
+                else:
+                    print("Passwords do not match. Please try again.")
             else:
                 print("Invalid email or security answer.")
 
@@ -181,34 +243,58 @@ class AccountManagement(Bank):
         super().__init__()
 
     def deposit(self):
-        amount = float(input("Enter the amount to deposit: "))
-        if amount > 0:
-            self.state.set_amount(self.state.get_amount() + amount)
-            print(f"Congrats, you have deposited {amount}. New balance: {self.state.get_amount()}.")
-        else:
-            print("Invalid amount. Enter a valid amount.")
+        try:
+            amount = float(input("Enter the amount to deposit: "))
+            if amount > 0:
+                new_balance = self.state.get_amount() + amount
+                self.c.execute('UPDATE accounts SET balance = ? WHERE account_number = ?', (new_balance, self.state.get_account_number()))
+                self.conn.commit()
+                self.state.set_amount(new_balance)  # Update the state
+                print(f"Congrats, you have deposited {amount:.2f}. New balance: {self.state.get_amount():.2f}.")
+                self.record_transaction("Deposit", amount)
+            else:
+                print("Invalid amount. Please enter a positive value.")
+        except ValueError:
+            print("Invalid input. Please enter a numeric value.")
 
     def withdraw(self):
-        amount = float(input("Enter the amount to withdraw: "))
-        if amount > 0:
-            pin = input("Enter your pin: ")
-            if pin == str(self.state.get_pin()):
-                if amount <= self.state.get_amount():
-                    self.state.set_amount(self.state.get_amount() - amount)
-                    print(f"Congrats, you have successfully withdrawn {amount}. New balance: {self.state.get_amount()}.")
+        try:
+            amount = float(input("Enter the amount to withdraw: "))
+            if amount > 0:
+                pin = input("Enter your PIN: ")
+                if hash_value(pin) == self.state.get_pin():
+                    if amount <= self.state.get_amount():
+                        new_balance = self.state.get_amount() - amount
+                        self.c.execute('UPDATE accounts SET balance = ? WHERE account_number = ?', (new_balance, self.state.get_account_number()))
+                        self.conn.commit()
+                        self.state.set_amount(new_balance)  # Update the state
+                        print(f"Congrats, you have successfully withdrawn {amount:.2f}. New balance: {self.state.get_amount():.2f}.")
+                        self.record_transaction("Withdrawal", amount)
+                    else:
+                        print("Insufficient funds.")
                 else:
-                    print("Insufficient funds.")
+                    print("Invalid PIN. Please try again.")
             else:
-                print("Invalid pin. Try again.")
-        else:
-            print("Invalid amount.")
+                print("Invalid amount. Please enter a positive value.")
+        except ValueError:
+            print("Invalid input. Please enter a numeric value.")
 
     def check_balance(self):
-        pin = input("Enter your pin: ")
-        if pin == str(self.state.get_pin()):
-            print(f"Your account balance is {self.state.get_amount()}.")
+        pin = input("Enter your PIN: ")
+        if hash_value(pin) == self.state.get_pin():
+            print(f"Your account balance is {self.state.get_amount():.2f}.")
         else:
-            print("Invalid pin. Try again.")
+            print("Invalid PIN. Please try again.")
+
+    def record_transaction(self, transaction_type, amount):
+        with sqlite3.connect('bank.db') as conn:
+            c = conn.cursor()
+            date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            c.execute('''
+                INSERT INTO transactions (account_number, transaction_type, amount, date)
+                VALUES (?, ?, ?, ?)
+            ''', (self.state.get_account_number(), transaction_type, amount, date))
+            conn.commit()
 
 class MoneyTransfer(Bank):
     def __init__(self):
@@ -227,7 +313,7 @@ class MoneyTransfer(Bank):
                     pin = input("Enter your pin: ")
                     if pin == str(self.state.get_pin()):
                         self.state.set_amount(self.state.get_amount() - amount)
-                        self.record_transaction("Domestic Transfer", amount)
+                        self.record_transaction("Domestic Transfer", amount, account_num)
                         print(f"You have successfully debited {amount} to {name}.")
                     else:
                         print("Incorrect pin!")
@@ -252,7 +338,7 @@ class MoneyTransfer(Bank):
                     pin = input("Enter your pin: ")
                     if pin == str(self.state.get_pin()):
                         self.state.set_amount(self.state.get_amount() - amount)
-                        self.record_transaction("Bank Transfer", amount)
+                        self.record_transaction("Bank Transfer", amount, bank_account)
                         print(f"You have successfully debited {amount} to {name} at {bank_name}.")
                     else:
                         print("Incorrect pin!")
@@ -263,14 +349,14 @@ class MoneyTransfer(Bank):
         else:
             print("Invalid account number.")
 
-    def record_transaction(self, transaction_type, amount):
+    def record_transaction(self, transaction_type, amount, account_number):
         with sqlite3.connect('bank.db') as conn:
             c = conn.cursor()
             date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             c.execute('''
                 INSERT INTO transactions (account_number, transaction_type, amount, date)
                 VALUES (?, ?, ?, ?)
-            ''', (self.create_accountnum(), transaction_type, amount, date))
+            ''', (account_number, transaction_type, amount, date))
             conn.commit()
 
 class MomoTransfer(Bank):
@@ -300,7 +386,7 @@ class MomoTransfer(Bank):
                             pin = input("Enter your PIN: ")
                             if pin == str(self.state.get_pin()):
                                 self.state.set_amount(self.state.get_amount() - amount)
-                                self.record_transaction("Mobile Transfer", amount)
+                                self.record_transaction("Mobile Transfer", amount, number)
                                 print(f"You have successfully debited {amount} to {name}.")
                             else:
                                 print("Invalid PIN. Please try again.")
@@ -315,12 +401,12 @@ class MomoTransfer(Bank):
         else:
             print("Invalid choice. Please select a valid network.")
 
-    def record_transaction(self, transaction_type, amount):
+    def record_transaction(self, transaction_type, amount, number):
         with sqlite3.connect('bank.db') as conn:
             c = conn.cursor()
             date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             c.execute('''
                 INSERT INTO transactions (account_number, transaction_type, amount, date)
                 VALUES (?, ?, ?, ?)
-            ''', (self.create_accountnum(), transaction_type, amount, date))
+            ''', (number, transaction_type, amount, date))
             conn.commit()
