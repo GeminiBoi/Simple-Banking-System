@@ -410,3 +410,11 @@ class MomoTransfer(Bank):
                 VALUES (?, ?, ?, ?)
             ''', (number, transaction_type, amount, date))
             conn.commit()
+
+class Airtime(Bank):
+    def __init__(self)
+    super.__init__()
+    def buyAirtime(self):
+        def networks(self):
+            print("Choose the network")
+            print("1.MTN")
